@@ -2,7 +2,7 @@ import streamlit as st
 from ingest import ingest_url
 from rag import answer_query
 
-st.title("Structured RAG over Website (Mistral)")
+st.title("Structured RAG over Website (Ollama)")
 
 url = st.text_input("Enter website URL")
 
