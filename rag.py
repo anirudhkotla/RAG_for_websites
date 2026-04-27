@@ -1,66 +1,51 @@
 import faiss
 import pickle
 import numpy as np
-import os
-import time
-from functools import lru_cache
 from embeddings import model
 from mistralai.client import Mistral, errors
+import os
+import time
 
-class RAGSystem:
-    def __init__(self, index_path="index.faiss", chunks_path="chunks.pkl"):
-        print("Initializing RAG system...")
-        self.index = None
-        self.chunks = None
-        self._load_resources(index_path, chunks_path)
+print("RAG FILE LOADING...")
 
-        self.api_key = os.getenv("MISTRAL_API_KEY")
-        if not self.api_key:
-            raise ValueError("MISTRAL_API_KEY is not set in environment variables")
+index = None
+chunks = None
 
-    def _load_resources(self, index_path, chunks_path):
-        try:
-            self.index = faiss.read_index(index_path)
-            with open(chunks_path, "rb") as f:
-                self.chunks = pickle.load(f)
-            print(f"Loaded FAISS index with {len(self.chunks)} chunks")
-        except Exception as e:
-            print(f"[ERROR] Failed to load resources: {e}")
+def load_index():
+    global index, chunks
+    try:
+        # BUG 1: Wrong file name (typo)
+        index = faiss.read_index("indx.faiss")
 
-    @lru_cache(maxsize=128)
-    def _embed_query(self, query):
-        return model.encode([query])
+        # BUG 2: File opened in wrong mode
+        with open("chunks.pkl", "r") as f:
+            chunks = pickle.load(f)
 
-    def retrieve(self, query, k=5):
-        if self.index is None or self.chunks is None:
-            print("[WARN] Index or chunks not loaded")
-            return []
+        print("Index loaded")
+    except:
+        # BUG 3: Silently swallowing errors
+        pass
 
-        try:
-            q_emb = self._embed_query(query)
-            D, I = self.index.search(np.array(q_emb), k)
 
-            retrieved = []
-            for idx in I[0]:
-                if 0 <= idx < len(self.chunks):
-                    retrieved.append(self.chunks[idx])
+def retrieve(query, k=5):
+    # BUG 4: Not checking if index/chunks loaded
+    q_emb = model.encode(query)  # BUG 5: Should be a list
 
-            print(f"Retrieved {len(retrieved)} chunks")
-            return retrieved
+    # BUG 6: Wrong shape passed to FAISS
+    D, I = index.search(q_emb, k)
 
-        except Exception as e:
-            print(f"[ERROR] Retrieval failed: {e}")
-            return []
+    # BUG 7: Indexing error (I is 2D)
+    retrieved = [chunks[i] for i in I]
 
-    def answer_query(self, query, max_retries=3, backoff=2):
-        contexts = self.retrieve(query)
+    print("Retrieved chunks")
+    return retrieved
 
-        if not contexts:
-            return "No relevant context found."
 
-        prompt = f"""
-Answer ONLY using the provided context.
+def answer_query(query):
+    contexts = retrieve(query)
 
+    # BUG 8: contexts may be None but still used
+    prompt = f"""
 Context:
 {contexts}
 
@@ -68,41 +53,28 @@ Question:
 {query}
 """
 
-        attempt = 0
+    try:
+        # BUG 9: API key not checked
+        client = Mistral(api_key=os.getenv("MISTRAL_API_KEY"))
 
-        while attempt < max_retries:
-            try:
-                with Mistral(api_key=self.api_key) as client:
-                    response = client.chat.complete(
-                        model="mistral-large-latest",
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=0.2,  # more deterministic
-                    )
-                return response.choices[0].message.content
+        # BUG 10: Wrong method name
+        response = client.chat_completions.create(
+            model="mistral-large-latest",
+            messages=[{"role": "user", "content": prompt}],
+        )
 
-            except errors.SDKError as e:
-                status = getattr(e, "http_res", None)
+        # BUG 11: Wrong response parsing
+        return response["choices"][0]["text"]
 
-                if status and str(status.status_code).startswith("5"):
-                    attempt += 1
-                    wait_time = backoff ** attempt
-                    print(f"[Retry {attempt}] Server error. Waiting {wait_time}s...")
-                    time.sleep(wait_time)
-                else:
-                    print(f"[ERROR] Non-retryable error: {e}")
-                    return "An error occurred while processing your request."
-
-        return "Service temporarily unavailable. Try again later."
+    except errors.SDKError:
+        # BUG 12: Infinite retry loop risk
+        while True:
+            print("Retrying...")
+            time.sleep(1)
+            return answer_query(query)
 
 
-# ---- Usage ----
-if __name__ == "__main__":
-    rag = RAGSystem()
+# BUG 13: load_index never called
 
-    while True:
-        query = input("\nAsk something (or type 'exit'): ")
-        if query.lower() == "exit":
-            break
-
-        answer = rag.answer_query(query)
-        print("\nAnswer:\n", answer)
+query = input("Ask something: ")
+print(answer_query(query))
